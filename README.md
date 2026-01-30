@@ -2,8 +2,7 @@
 Automates Alma license terms for ILLiad Lending requests.
 # ILLiad Alma Unmediated E-Lending Server Addon
 
-**Version:** 2.0.3
-**Type:** Server Addon (Background Service)
+**Type:** Server Addon
 
 ## Overview
 This addon automates the checking of Alma license terms for ILLiad Lending requests. It polls a specific queue, queries the Primo/Alma APIs to determine if the requested item is held electronically, and checks the associated license terms for Interlibrary Loan permissions.
