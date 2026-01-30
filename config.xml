@@ -1,0 +1,51 @@
+<Configuration>
+  <Name>Alma Unmediated E-Lending Server Addon</Name>
+  <Author>Robert T. Wilson, University of Minnesota</Author>
+  <Version>1.9.2</Version>
+  <Active>true</Active>
+  <Type>Server</Type>
+  <Files>
+    <File>Main.lua</File>
+    <File>JsonParser.lua</File>
+  </Files>
+  <Description>Checks Alma/Primo API to see if a requested item is licensed for ILL.</Description>
+  <Settings>
+    <Setting name="BaseUrl" value="https://api-na.hosted.exlibrisgroup.com" type="string">
+      <Description>The base URL for Ex Libris APIs.</Description>
+    </Setting>
+    <Setting name="PrimoApiKey" value="" type="string">
+      <Description>API Key for Primo Search.</Description>
+    </Setting>
+    <Setting name="AlmaApiKey" value="" type="string">
+      <Description>API Key for Alma.</Description>
+    </Setting>
+    <Setting name="PrimoInst" value="01_INST" type="string">
+      <Description>Institution Code (e.g. 01MYUNIVERSITY_INST).</Description>
+    </Setting>
+    <Setting name="PrimoVid" value="01_INST:ES" type="string">
+      <Description>View ID.</Description>
+    </Setting>
+    <Setting name="PrimoTab" value="Everything" type="string">
+      <Description>Search Tab.</Description>
+    </Setting>
+    <Setting name="PrimoScope" value="Campus" type="string">
+      <Description>Search Scope.</Description>
+    </Setting>
+
+    <Setting name="ProcessQueue" value="Lending Testing" type="string">
+      <Description>The addon will process transactions sitting in this status.</Description>
+    </Setting>
+    <Setting name="SuccessQueue" value="Lending Testing Dev" type="string">
+      <Description>Where to move the transaction if the license IS permitted.</Description>
+    </Setting>
+    <Setting name="DenyQueue" value="Lending Testing Dev" type="string">
+      <Description>Where to move the transaction if the license IS NOT permitted.</Description>
+    </Setting>
+    <Setting name="NotFoundQueue" value="Lending Testing Dev" type="string">
+      <Description>Where to move the transaction if no record is found in Primo.</Description>
+    </Setting>
+    <Setting name='AutoRoute' value='true' type='boolean'>
+      <Description>If true, transactions will be moved to queues automatically.</Description>
+    </Setting>
+  </Settings>
+</Configuration>
