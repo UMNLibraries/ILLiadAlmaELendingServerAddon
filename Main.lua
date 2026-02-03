@@ -1,6 +1,8 @@
--- ============================================================
--- ALMA LICENSE CHECK - SMART SEARCH VERSION (v1.9.5)
--- Feature: ISSN first and trying again if not electronic
+[200~-- ============================================================
+-- ALMA LICENSE CHECK - NUCLEAR FIX (v1.9.9)
+-- Logic: Deep Search (v1.9.4 logic)
+-- Fixes: COMPLETELY separates string cleaning from table insertion.
+--        Impossible for 'gsub' counts to crash the script.
 -- ============================================================
 
 luanet.load_assembly("System")
@@ -40,7 +42,7 @@ function Init()
     Settings.NotFoundQueue = GetSetting("NotFoundQueue")
 
     RegisterSystemEventHandler("SystemTimerElapsed", "TimerElapsed")
-    log:Debug("Alma License Check: Initialized (Smart Search Enabled).")
+    log:Debug("Alma License Check: Initialized (v2.0.9 Nuclear Fix).")
 end
 
 function TimerElapsed()
@@ -109,19 +111,19 @@ end
 
 function EvaluateTransaction(data)
     local tn = tonumber(data.TN)
-    ExecuteCommand("AddNote", {tn, "Alma License Check: Starting..."})
+    ExecuteCommand("AddNote", {tn, "Alma Check: Starting evaluation..."})
 
-    -- SMART SEARCH: Finds the best MMS ID that actually has portfolios
+    -- SMART SEARCH with DEEP SCAN (v2.0.5 Logic)
     local mmsId = GetMmsIdSmart(tn, data.OCLC, data.ISSN, data.LoanTitle or data.ArticleTitle)
 
     if mmsId then
-        log:Debug("TN " .. tn .. ": Valid Electronic Match Found. MMS ID: " .. mmsId)
+        log:Debug("TN " .. tn .. ": Electronic Match Found. MMS ID: " .. mmsId)
         local allowed, licId = CheckAlmaLending(tn, mmsId)
         if allowed then
-            ExecuteCommand("AddNote", {tn, "Alma Check: ILL ALLOWED. License: " .. licId})
+            ExecuteCommand("AddNote", {tn, "Alma Check: ALLOWED. License: " .. licId})
             ExecuteCommand("Route", {tn, Settings.SuccessQueue})
         else
-            ExecuteCommand("AddNote", {tn, "Alma Check: ILL Terms NOT Found."})
+            ExecuteCommand("AddNote", {tn, "Alma Check: DENIED. No permitted terms."})
             ExecuteCommand("Route", {tn, Settings.DenyQueue})
         end
     else
@@ -131,53 +133,59 @@ function EvaluateTransaction(data)
 end
 
 -- ==========================================
--- SMART SEARCH LOGIC
+-- SMART SEARCH LOGIC (DEEP SCAN)
 -- ==========================================
 
-function GetMmsIdSmart(tn, isxn, oclc, title)
-    -- Helper to check if a search result is "useful" (has portfolios)
-    local function Check(queryType, val)
-        local mms = CallPrimoApi(val)
-        if mms then
+function GetMmsIdSmart(tn, oclc, isxn, title)
+    -- Helper: Takes a list of MMS IDs and checks them one by one
+    local function CheckList(mmsList)
+        if not mmsList then return nil end
+        for _, mms in ipairs(mmsList) do
             if HasPortfolios(mms) then
-                log:Debug(queryType .. " Match (" .. mms .. ") has portfolios. Accepting.")
+                log:Debug("Valid Portfolio found on MMS: " .. mms)
                 return mms
-            else
-                log:Debug(queryType .. " Match (" .. mms .. ") is empty (Print record?). skipping...")
             end
         end
         return nil
     end
 
-    -- 1. ISxN (ISBN/ISSN)
+    -- 1. OCLC Exact
+    if oclc and oclc ~= "" then
+        local list = CallPrimoApi("any,contains," .. oclc)
+        local res = CheckList(list)
+        if res then return res end
+    end
+    
+    -- 2. ISxN (ISBN/ISSN)
     if isxn and isxn ~= "" then
         local clean = isxn:gsub("[- ]", "")
         local field = (string.len(clean) > 9) and "isbn" or "issn"
-        local res = Check("ISxN", field .. ",exact," .. clean)
+        local list = CallPrimoApi(field .. ",exact," .. clean)
+        local res = CheckList(list)
         if res then return res end
     end
 
-    -- 2. OCLC Numeric Only (Backup)
+    -- 3. OCLC Numeric Only
     if oclc and oclc ~= "" then
         local num = oclc:gsub("%D", "")
         if num ~= "" then
-            local res = Check("OCLC-Num", "any,contains," .. num)
+            local list = CallPrimoApi("any,contains," .. num)
+            local res = CheckList(list)
             if res then return res end
         end
     end
 
-    -- 3. Title (Last Resort)
+    -- 4. Title (Last Resort)
     if title and title ~= "" then
-        -- Title searches are fuzzy, we accept the first match we find
-        local mms = CallPrimoApi("title,contains," .. title)
-        if mms and HasPortfolios(mms) then return mms end
+        local list = CallPrimoApi("title,contains," .. title)
+        local res = CheckList(list)
+        if res then return res end
     end
 
     return nil
 end
 
 function HasPortfolios(mmsId)
-    -- Quick check: Does this Bib have *any* portfolios?
     local url = string.format("%s/almaws/v1/bibs/%s/portfolios?limit=1&apikey=%s", 
         Settings.BaseUrl, mmsId, Settings.AlmaApiKey)
     
@@ -185,7 +193,6 @@ function HasPortfolios(mmsId)
     if not res then return false end
     
     local json = JsonParser:ParseJSON(res)
-    -- If 'total_record_count' > 0, we have portfolios
     if json and json.total_record_count and tonumber(json.total_record_count) > 0 then
         return true
     end
@@ -193,7 +200,7 @@ function HasPortfolios(mmsId)
 end
 
 -- ==========================================
--- STANDARD API TOOLS
+-- API TOOLS (SAFE MODE)
 -- ==========================================
 
 function SafeDownload(url)
@@ -212,15 +219,33 @@ function CallPrimoApi(q)
     local url = string.format("%s/primo/v1/search?inst=%s&vid=%s&tab=%s&scope=%s&q=%s&apikey=%s",
         Settings.BaseUrl, Settings.PrimoInst, Settings.PrimoVid, 
         Settings.PrimoTab, Settings.PrimoScope, HttpUtility.UrlEncode(q), Settings.PrimoApiKey)
+    
     local res = SafeDownload(url)
+    local mmsList = {}
+
     if res then
         local json = JsonParser:ParseJSON(res)
-        if json and json.docs and json.docs[1] then
-             local raw = json.docs[1].pnx.control.sourcerecordid[1]
-             if raw then return raw:gsub("alma_", "") end
+        if json and json.docs then
+            for _, doc in ipairs(json.docs) do
+                if doc.pnx and doc.pnx.control and doc.pnx.control.sourcerecordid then
+                    local ids = doc.pnx.control.sourcerecordid
+                    
+                    if type(ids) == "table" then
+                        for _, rawId in ipairs(ids) do
+                            -- SAFE MODE: Separate variable, ignore second return value
+                            local cleanId = rawId:gsub("alma_", "")
+                            table.insert(mmsList, cleanId)
+                        end
+                    else
+                        -- SAFE MODE: Separate variable, ignore second return value
+                        local cleanId = ids:gsub("alma_", "")
+                        table.insert(mmsList, cleanId)
+                    end
+                end
+            end
         end
     end
-    return nil
+    return mmsList
 end
 
 function CheckAlmaLending(tn, mmsId)
