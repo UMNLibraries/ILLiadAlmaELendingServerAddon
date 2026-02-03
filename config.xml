@@ -1,7 +1,7 @@
 <Configuration>
   <Name>Alma Unmediated E-Lending Server Addon</Name>
   <Author>Robert T. Wilson, University of Minnesota</Author>
-  <Version>1.9.2</Version>
+  <Version>1.9.5</Version>
   <Active>true</Active>
   <Type>Server</Type>
   <Files>
@@ -43,9 +43,6 @@
     </Setting>
     <Setting name="NotFoundQueue" value="Lending Testing Dev" type="string">
       <Description>Where to move the transaction if no record is found in Primo.</Description>
-    </Setting>
-    <Setting name='AutoRoute' value='true' type='boolean'>
-      <Description>If true, transactions will be moved to queues automatically.</Description>
     </Setting>
   </Settings>
 </Configuration>
