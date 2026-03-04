@@ -306,9 +306,20 @@ function CheckAlmaLending(tn, mmsId)
         elseif port.electronic_collection and port.electronic_collection.id then
             licId = GetCollectionLicense(port.electronic_collection.id.value)
         end
-        if licId and CheckLicenseTerms(licId) then
-            isAllowed = true
-            table.insert(validLicenses, licId)
+        
+        if licId then
+            local permitted, licName = CheckLicenseTerms(licId)
+            if permitted then
+                isAllowed = true
+                
+                -- Format the output to show "License Name (License Code)"
+                local displayString = licId
+                if licName and licName ~= "" then
+                    displayString = licName .. " (" .. licId .. ")"
+                end
+                
+                table.insert(validLicenses, displayString)
+            end
         end
     end
     return isAllowed, validLicenses
