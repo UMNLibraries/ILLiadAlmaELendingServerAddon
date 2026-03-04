@@ -218,4 +218,128 @@ function GetMmsIdsSmart(tn, oclc, isxn, title)
 
     -- 4. Title (Fallback only if nothing found yet, prevents API flooding)
     if #validMmsIds == 0 and title and title ~= "" then
-        CheckList
+        CheckList(CallPrimoApi("title,contains," .. title))
+    end
+
+    return validMmsIds
+end
+
+function HasPortfolios(mmsId)
+    local url = string.format("%s/almaws/v1/bibs/%s/portfolios?limit=1&apikey=%s", 
+        Settings.BaseUrl, mmsId, Settings.AlmaApiKey)
+    
+    local res = SafeDownload(url)
+    if not res then return false end
+    
+    local json = JsonParser:ParseJSON(res)
+    if json and json.total_record_count and tonumber(json.total_record_count) > 0 then
+        return true
+    end
+    return false
+end
+
+-- ==========================================
+-- API TOOLS
+-- ==========================================
+
+function SafeDownload(url)
+    local client = WebClient()
+    client.Headers:Add("User-Agent", "ILLiad/AlmaAddon")
+    client.Headers:Add("Accept", "application/json")
+    local success, res = pcall(function() return client:DownloadString(url) end)
+    if not success then
+        log:Error("API FAIL: " .. url .. " | Error: " .. tostring(res))
+        return nil
+    end
+    return res
+end
+
+function CallPrimoApi(q)
+    local url = string.format("%s/primo/v1/search?inst=%s&vid=%s&tab=%s&scope=%s&q=%s&apikey=%s",
+        Settings.BaseUrl, Settings.PrimoInst, Settings.PrimoVid, 
+        Settings.PrimoTab, Settings.PrimoScope, HttpUtility.UrlEncode(q), Settings.PrimoApiKey)
+    
+    local res = SafeDownload(url)
+    local mmsList = {}
+
+    if res then
+        local json = JsonParser:ParseJSON(res)
+        if json and json.docs then
+            for _, doc in ipairs(json.docs) do
+                if doc.pnx and doc.pnx.control and doc.pnx.control.sourcerecordid then
+                    local ids = doc.pnx.control.sourcerecordid
+                    
+                    if type(ids) == "table" then
+                        for _, rawId in ipairs(ids) do
+                            local cleanId = rawId:gsub("alma_", "")
+                            table.insert(mmsList, cleanId)
+                        end
+                    else
+                        local cleanId = ids:gsub("alma_", "")
+                        table.insert(mmsList, cleanId)
+                    end
+                end
+            end
+        end
+    end
+    return mmsList
+end
+
+function CheckAlmaLending(tn, mmsId)
+    local url = string.format("%s/almaws/v1/bibs/%s/portfolios?apikey=%s", 
+        Settings.BaseUrl, mmsId, Settings.AlmaApiKey)
+    local res = SafeDownload(url)
+    if not res then return false, nil end
+    local json = JsonParser:ParseJSON(res)
+    if not json or not json.portfolio then return false, nil end
+    
+    local portfolios = json.portfolio
+    if portfolios.id then portfolios = { portfolios } end 
+
+    local validLicenses = {}
+    local isAllowed = false
+
+    for _, port in ipairs(portfolios) do
+        local licId = nil
+        if port.license and port.license.value then
+            licId = port.license.value
+        elseif port.electronic_collection and port.electronic_collection.id then
+            licId = GetCollectionLicense(port.electronic_collection.id.value)
+        end
+        if licId and CheckLicenseTerms(licId) then
+            isAllowed = true
+            table.insert(validLicenses, licId)
+        end
+    end
+    return isAllowed, validLicenses
+end
+
+function GetCollectionLicense(collId)
+    local url = string.format("%s/almaws/v1/electronic/e-collections/%s?apikey=%s", 
+        Settings.BaseUrl, collId, Settings.AlmaApiKey)
+    local res = SafeDownload(url)
+    if res then
+        local json = JsonParser:ParseJSON(res)
+        if json.license and json.license.value then return json.license.value end
+    end
+    return nil
+end
+
+function CheckLicenseTerms(licId)
+    local url = string.format("%s/almaws/v1/acq/licenses/%s?apikey=%s", 
+        Settings.BaseUrl, licId, Settings.AlmaApiKey)
+    local res = SafeDownload(url)
+    if res then
+        local json = JsonParser:ParseJSON(res)
+        if json and json.term then
+            for _, t in ipairs(json.term) do
+                local c = t.code and t.code.value
+                local v = t.value and t.value.value
+                if v == "PERMITTED" and (c == "ILLELEC" or c == "ILLSET" or c == "ILLPRINTFAX" or c == "INTLILL") then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
