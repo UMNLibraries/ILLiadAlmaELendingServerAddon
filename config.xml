@@ -1,7 +1,7 @@
 <Configuration>
   <Name>Alma Unmediated E-Lending Server Addon</Name>
   <Author>Robert T. Wilson, University of Minnesota</Author>
-  <Version>1.9.9</Version>
+  <Version>2.0.0</Version>
   <Active>true</Active>
   <Type>Server</Type>
   <Files>
@@ -32,16 +32,19 @@
       <Description>Search Scope.</Description>
     </Setting>
 
-    <Setting name="ProcessQueue" value="Lending Testing" type="string">
-      <Description>The addon will process transactions sitting in this status.</Description>
+    <Setting name="ProcessQueue" value="Lending Testing, Lending Testing Dev, Lending Testing Dev 2" type="string">
+      <Description>Comma-separated list of queues to process.</Description>
     </Setting>
-    <Setting name="SuccessQueue" value="Lending Testing Dev" type="string">
+    <Setting name="AutoRoute" value="false" type="boolean">
+      <Description>If true, transactions are moved to the queues below. If false, they are only annotated.</Description>
+    </Setting>
+    <Setting name="SuccessQueue" value="ILL Is Allowed" type="string">
       <Description>Where to move the transaction if the license IS permitted.</Description>
     </Setting>
-    <Setting name="DenyQueue" value="Lending Testing Dev" type="string">
+    <Setting name="DenyQueue" value="ILL Is Denied" type="string">
       <Description>Where to move the transaction if the license IS NOT permitted.</Description>
     </Setting>
-    <Setting name="NotFoundQueue" value="Lending Testing Dev" type="string">
+    <Setting name="NotFoundQueue" value="ILL Terms not Found" type="string">
       <Description>Where to move the transaction if no record is found in Primo.</Description>
     </Setting>
   </Settings>

@@ -1,8 +1,6 @@
-[200~-- ============================================================
--- ALMA LICENSE CHECK - NUCLEAR FIX (v1.9.9)
--- Logic: Deep Search (v1.9.4 logic)
--- Fixes: COMPLETELY separates string cleaning from table insertion.
---        Impossible for 'gsub' counts to crash the script.
+-- ============================================================
+-- ALMA LICENSE CHECK (v2.0.0)
+-- Features: Multi-queue, Auto-Route Toggle, Comprehensive License Logging
 -- ============================================================
 
 luanet.load_assembly("System")
@@ -23,7 +21,6 @@ local Settings = {}
 local isCurrentlyProcessing = false
 
 function Init()
-    -- Force TLS 1.2
     pcall(function()
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
     end)
@@ -37,12 +34,13 @@ function Init()
     Settings.PrimoScope = GetSetting("PrimoScope")
     
     Settings.ProcessQueue = GetSetting("ProcessQueue")
+    Settings.AutoRoute = GetSetting("AutoRoute")
     Settings.SuccessQueue = GetSetting("SuccessQueue")
     Settings.DenyQueue = GetSetting("DenyQueue")
     Settings.NotFoundQueue = GetSetting("NotFoundQueue")
 
     RegisterSystemEventHandler("SystemTimerElapsed", "TimerElapsed")
-    log:Debug("Alma License Check: Initialized (v2.0.9 Nuclear Fix).")
+    log:Debug("Alma License Check: Initialized (v2.0.0).")
 end
 
 function TimerElapsed()
@@ -56,16 +54,35 @@ function TimerElapsed()
 end
 
 function ProcessTransactions()
-    log:Debug("Alma Check: Scanning Queue: " .. Settings.ProcessQueue)
+    log:Debug("Alma Check: Scanning Queues: " .. Settings.ProcessQueue)
     local connection = CreateManagedDatabaseConnection()
     
     local dbSuccess, dbErr = pcall(function()
         connection:Connect()
+        
+        -- Parse comma-separated queues into a SQL IN clause
+        local queueList = {}
+        for q in string.gmatch(Settings.ProcessQueue, '([^,]+)') do
+            -- Trim whitespace and wrap in single quotes
+            table.insert(queueList, "'" .. q:match("^%s*(.-)%s*$") .. "'")
+        end
+        local queueSql = table.concat(queueList, ", ")
+
         local query = [[
             SELECT TransactionNumber, ESPNumber, ISSN, LoanTitle, PhotoJournalTitle 
             FROM Transactions 
-            WHERE TransactionStatus = ']] .. Settings.ProcessQueue .. [['
+            WHERE TransactionStatus IN (]] .. queueSql .. [[)
         ]]
+
+        -- If AutoRoute is off, prevent infinite loops by ignoring TNs that already have our note
+        if not Settings.AutoRoute then
+            query = query .. [[
+                AND TransactionNumber NOT IN (
+                    SELECT TransactionNumber FROM Notes WHERE Note LIKE 'Alma Check:%'
+                )
+            ]]
+        end
+
         connection.QueryString = query
         local results = connection:Execute()
         local transactionsToProcess = {}
@@ -87,7 +104,7 @@ function ProcessTransactions()
             end
         end
 
-        log:Debug("Alma Check: Found " .. #transactionsToProcess .. " transactions.")
+        log:Debug("Alma Check: Found " .. #transactionsToProcess .. " transactions to process.")
 
         for _, txnData in ipairs(transactionsToProcess) do
             local procSuccess, procErr = pcall(function() EvaluateTransaction(txnData) end)
@@ -113,76 +130,98 @@ function EvaluateTransaction(data)
     local tn = tonumber(data.TN)
     ExecuteCommand("AddNote", {tn, "Alma Check: Starting evaluation..."})
 
-    -- SMART SEARCH with DEEP SCAN (v2.0.5 Logic)
-    local mmsId = GetMmsIdSmart(tn, data.OCLC, data.ISSN, data.LoanTitle or data.ArticleTitle)
+    -- Retrieves a LIST of MMS IDs rather than stopping at the first match
+    local mmsIds = GetMmsIdsSmart(tn, data.OCLC, data.ISSN, data.LoanTitle or data.ArticleTitle)
 
-    if mmsId then
-        log:Debug("TN " .. tn .. ": Electronic Match Found. MMS ID: " .. mmsId)
-        local allowed, licId = CheckAlmaLending(tn, mmsId)
-        if allowed then
-            ExecuteCommand("AddNote", {tn, "Alma Check: ALLOWED. License: " .. licId})
-            ExecuteCommand("Route", {tn, Settings.SuccessQueue})
+    if mmsIds and #mmsIds > 0 then
+        log:Debug("TN " .. tn .. ": Electronic Match Found. Checking " .. #mmsIds .. " records.")
+        
+        local isAllowed = false
+        local allLicenses = {}
+        
+        -- Check every matched record and gather valid licenses
+        for _, mmsId in ipairs(mmsIds) do
+            local allowed, licenses = CheckAlmaLending(tn, mmsId)
+            if allowed and licenses then
+                isAllowed = true
+                for _, lic in ipairs(licenses) do
+                    -- Prevent duplicate licenses in the note
+                    local isDup = false
+                    for _, existing in ipairs(allLicenses) do
+                        if existing == lic then isDup = true break end
+                    end
+                    if not isDup then table.insert(allLicenses, lic) end
+                end
+            end
+        end
+
+        if isAllowed then
+            local licenseStr = table.concat(allLicenses, ", ")
+            ExecuteCommand("AddNote", {tn, "Alma Check: ALLOWED. Permitted Licenses found: " .. licenseStr})
+            if Settings.AutoRoute then
+                ExecuteCommand("Route", {tn, Settings.SuccessQueue})
+            end
         else
-            ExecuteCommand("AddNote", {tn, "Alma Check: DENIED. No permitted terms."})
-            ExecuteCommand("Route", {tn, Settings.DenyQueue})
+            ExecuteCommand("AddNote", {tn, "Alma Check: DENIED. No permitted terms found on any matching records."})
+            if Settings.AutoRoute then
+                ExecuteCommand("Route", {tn, Settings.DenyQueue})
+            end
         end
     else
         ExecuteCommand("AddNote", {tn, "Alma Check: Not Found (or no electronic portfolios)."})
-        ExecuteCommand("Route", {tn, Settings.NotFoundQueue})
+        if Settings.AutoRoute then
+            ExecuteCommand("Route", {tn, Settings.NotFoundQueue})
+        end
     end
 end
 
 -- ==========================================
--- SMART SEARCH LOGIC (DEEP SCAN)
+-- SMART SEARCH LOGIC (AGGREGATING ALL RESULTS)
 -- ==========================================
 
-function GetMmsIdSmart(tn, oclc, isxn, title)
-    -- Helper: Takes a list of MMS IDs and checks them one by one
+function GetMmsIdsSmart(tn, oclc, isxn, title)
+    local validMmsIds = {}
+    local checkedMmsIds = {}
+
     local function CheckList(mmsList)
-        if not mmsList then return nil end
+        if not mmsList then return end
         for _, mms in ipairs(mmsList) do
-            if HasPortfolios(mms) then
-                log:Debug("Valid Portfolio found on MMS: " .. mms)
-                return mms
+            if not checkedMmsIds[mms] then
+                checkedMmsIds[mms] = true
+                if HasPortfolios(mms) then
+                    log:Debug("Valid Portfolio found on MMS: " .. mms)
+                    table.insert(validMmsIds, mms)
+                end
             end
         end
-        return nil
     end
 
     -- 1. OCLC Exact
     if oclc and oclc ~= "" then
-        local list = CallPrimoApi("any,contains," .. oclc)
-        local res = CheckList(list)
-        if res then return res end
+        CheckList(CallPrimoApi("any,contains," .. oclc))
     end
     
     -- 2. ISxN (ISBN/ISSN)
     if isxn and isxn ~= "" then
         local clean = isxn:gsub("[- ]", "")
         local field = (string.len(clean) > 9) and "isbn" or "issn"
-        local list = CallPrimoApi(field .. ",exact," .. clean)
-        local res = CheckList(list)
-        if res then return res end
+        CheckList(CallPrimoApi(field .. ",exact," .. clean))
     end
 
     -- 3. OCLC Numeric Only
     if oclc and oclc ~= "" then
         local num = oclc:gsub("%D", "")
         if num ~= "" then
-            local list = CallPrimoApi("any,contains," .. num)
-            local res = CheckList(list)
-            if res then return res end
+            CheckList(CallPrimoApi("any,contains," .. num))
         end
     end
 
-    -- 4. Title (Last Resort)
-    if title and title ~= "" then
-        local list = CallPrimoApi("title,contains," .. title)
-        local res = CheckList(list)
-        if res then return res end
+    -- 4. Title (Fallback only if nothing found yet, prevents API flooding)
+    if #validMmsIds == 0 and title and title ~= "" then
+        CheckList(CallPrimoApi("title,contains," .. title))
     end
 
-    return nil
+    return validMmsIds
 end
 
 function HasPortfolios(mmsId)
@@ -200,7 +239,7 @@ function HasPortfolios(mmsId)
 end
 
 -- ==========================================
--- API TOOLS (SAFE MODE)
+-- API TOOLS
 -- ==========================================
 
 function SafeDownload(url)
@@ -232,12 +271,10 @@ function CallPrimoApi(q)
                     
                     if type(ids) == "table" then
                         for _, rawId in ipairs(ids) do
-                            -- SAFE MODE: Separate variable, ignore second return value
                             local cleanId = rawId:gsub("alma_", "")
                             table.insert(mmsList, cleanId)
                         end
                     else
-                        -- SAFE MODE: Separate variable, ignore second return value
                         local cleanId = ids:gsub("alma_", "")
                         table.insert(mmsList, cleanId)
                     end
@@ -259,6 +296,9 @@ function CheckAlmaLending(tn, mmsId)
     local portfolios = json.portfolio
     if portfolios.id then portfolios = { portfolios } end 
 
+    local validLicenses = {}
+    local isAllowed = false
+
     for _, port in ipairs(portfolios) do
         local licId = nil
         if port.license and port.license.value then
@@ -266,11 +306,23 @@ function CheckAlmaLending(tn, mmsId)
         elseif port.electronic_collection and port.electronic_collection.id then
             licId = GetCollectionLicense(port.electronic_collection.id.value)
         end
-        if licId and CheckLicenseTerms(licId) then
-            return true, licId
+        
+        if licId then
+            local permitted, licName = CheckLicenseTerms(licId)
+            if permitted then
+                isAllowed = true
+                
+                -- Format the output to show "License Name (License Code)"
+                local displayString = licId
+                if licName and licName ~= "" then
+                    displayString = licName .. " (" .. licId .. ")"
+                end
+                
+                table.insert(validLicenses, displayString)
+            end
         end
     end
-    return false, nil
+    return isAllowed, validLicenses
 end
 
 function GetCollectionLicense(collId)
