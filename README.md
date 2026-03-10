@@ -5,15 +5,14 @@ Automates Alma license terms for ILLiad Lending requests.
 **Type:** Server Addon
 
 ## Overview
-This addon automates the checking of Alma license terms for ILLiad Lending requests. It polls a specific queue, queries the Primo/Alma APIs to determine if the requested item is held electronically, and checks the associated license terms for Interlibrary Loan permissions.
+This addon automates the checking of Alma license terms for ILLiad Lending requests. It polls one or more queues (comma separted), queries the Primo/Alma APIs to determine if the requested item is held electronically, and checks the associated license terms for Interlibrary Loan permissions.
 
-Based on the result, the request is automatically routed to a Success, Deny, or Not Found queue.
+Based on the result, the request is automatically routed to a Success, Deny, or Not Found queue if auto-routing on and custom queues of your choice. Additionally, licensing information will be added to a note in request. If auto-routing is off, note will just be added. To re-run a check against a TN, you must delete previous notes added. 
 
 ## Features
 * **Waterfall Search:** Searches Primo by OCLC, ISBN/ISSN, and Title (in that order) to find the best match.
 * **License Validation:** Checks Alma license terms for specific permissions (`ILLELEC`, `ILLSET`, `ILLPRINTFAX`, `INTLILL`) set to `PERMITTED`.
 * **Direct SQL:** Uses optimized SQL queries to read transaction data without loading heavy ILLiad objects.
-* **TLS 1.2 Enforcement:** Hardcoded security protocol to ensure compatibility with Ex Libris APIs.
 
 ## Prerequisites
 * ILLiad 9.x or higher.
@@ -48,7 +47,8 @@ These values control where the addon searches within your catalog.
 * **PrimoScope:** Search Scope.
 
 ### Queue Management
-* **ProcessQueue:** The queue the addon monitors (e.g., `Lending Testing`).
+* **ProcessQueue:** The queue(s) the addon monitors (e.g., `Awaiting Lending Request Processing`).
+* **If AutoRouting on:**
 * **SuccessQueue:** Where to route items if a license permits lending.
 * **DenyQueue:** Where to route items if the license forbids lending.
 * **NotFoundQueue:** Where to route items if no match is found in Primo.
