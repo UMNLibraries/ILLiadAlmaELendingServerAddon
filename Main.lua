@@ -181,6 +181,24 @@ function EvaluateTransaction(data)
     end
 end
 
+function CleanTitle(title)
+    if not title or title == "" then return "" end
+    
+    -- Remove special characters
+    local clean = title:gsub("[^%w%s]", " ")
+    -- Collapse multiple spaces into a single space
+    clean = clean:gsub("%s+", " ")
+    -- Trim leading and trailing whitespace
+    clean = clean:match("^%s*(.-)%s*$")
+    -- Truncate to the first 60 characters because api
+    if string.len(clean) > 60 then
+        clean = string.sub(clean, 1, 60)
+        -- Ensure we don't cut off in the middle of a word
+        clean = clean:match("(.*)%s") or clean
+    end
+    
+    return clean
+end
 -- ==========================================
 -- SMART SEARCH LOGIC (AGGREGATING ALL RESULTS)
 -- ==========================================
@@ -213,15 +231,15 @@ function GetMmsIdsSmart(data)
             CheckList(CallPrimoApi(field .. ",exact," .. clean))
 
         elseif key == "TITLE" then
-            -- Use Article Title for Articles to avoid Journal-level coverage issues
-            local targetTitle = (data.RequestType == "Article") and data.ArticleTitle or data.LoanTitle
-            
+            -- Targeted Search: Article Title for Articles, Loan Title for Books
+            local rawTitle = (data.RequestType == "Article") and data.ArticleTitle or data.LoanTitle
+            -- Scrub title
+            local targetTitle = CleanTitle(rawTitle)
             if targetTitle and targetTitle ~= "" then
-                log:Debug("Searching by specific " .. data.RequestType .. " Title: " .. targetTitle)
+                log:Debug("Searching by Cleaned " .. data.RequestType .. " Title: " .. targetTitle)
                 CheckList(CallPrimoApi("title,contains," .. targetTitle))
             end
         end
-
         -- Exit early once a specific match is found
         if #validMmsIds > 0 then break end
     end
