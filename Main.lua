@@ -184,13 +184,17 @@ end
 function CleanTitle(title)
     if not title or title == "" then return "" end
     
-    -- Remove special characters
-    local clean = title:gsub("[^%w%s]", " ")
-    -- Collapse multiple spaces into a single space
+    -- 1. Remove special chars BUT KEEP hyphens and apostrophes
+    -- This turns "COVID-19: A Study!" into "COVID-19 A Study"
+    local clean = title:gsub("[^%w%s%-%']", " ")
+    
+    -- 2. Collapse multiple spaces into a single space
     clean = clean:gsub("%s+", " ")
-    -- Trim leading and trailing whitespace
+    
+    -- 3. Trim leading and trailing whitespace
     clean = clean:match("^%s*(.-)%s*$")
-    -- Truncate to the first 60 characters because api
+    
+    -- 4. Truncate to the first 60 characters to avoid API limits
     if string.len(clean) > 60 then
         clean = string.sub(clean, 1, 60)
         -- Ensure we don't cut off in the middle of a word
