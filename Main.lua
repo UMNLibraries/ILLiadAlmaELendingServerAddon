@@ -136,7 +136,8 @@ function EvaluateTransaction(data)
     ExecuteCommand("AddNote", {tn, "Alma Check: Starting evaluation..."})
 
     -- Retrieves a LIST of MMS IDs rather than stopping at the first match
-    local mmsIds = GetMmsIdsSmart(tn, data.OCLC, data.ISSN, data.LoanTitle or data.ArticleTitle)
+    -- local mmsIds = GetMmsIdsSmart(tn, data.OCLC, data.ISSN, data.LoanTitle or data.ArticleTitle)
+    local mmsIds = GetMmsIdsSmart(data)
 
     if mmsIds and #mmsIds > 0 then
         log:Debug("TN " .. tn .. ": Electronic Match Found. Checking " .. #mmsIds .. " records.")
