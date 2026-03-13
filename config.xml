@@ -1,7 +1,7 @@
 <Configuration>
   <Name>Alma Unmediated E-Lending Server Addon</Name>
-  <Author>Robert T. Wilson, University of Minnesota</Author>
-  <Version>2.0.0</Version>
+  <Author>Robert Timothy Wilson, University of Minnesota</Author>
+  <Version>2.0.1</Version>
   <Active>true</Active>
   <Type>Server</Type>
   <Files>
@@ -31,8 +31,10 @@
     <Setting name="PrimoScope" value="Campus" type="string">
       <Description>Search Scope.</Description>
     </Setting>
-
-    <Setting name="ProcessQueue" value="Lending Testing, Lending Testing Dev, Lending Testing Dev 2" type="string">
+    <Setting name="SearchOptions" value="Title,OCLC,ISSN" type="string">
+      <Description>Comma-separated list of search types: OCLC, ISSN, Title. If Article Request Type, Title uses ArticleTitle</Description>
+    </Setting>
+    <Setting name="ProcessQueue" value="Awaiting Lending Request Processing" type="string">
       <Description>Comma-separated list of queues to process.</Description>
     </Setting>
     <Setting name="AutoRoute" value="false" type="boolean">

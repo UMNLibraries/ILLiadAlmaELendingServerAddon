@@ -1,6 +1,9 @@
 -- ============================================================
--- ALMA LICENSE CHECK (v2.0.0)
--- Features: Multi-queue, Auto-Route Toggle, Comprehensive License Logging
+-- ALMA LICENSE CHECK (v2.0.1)
+-- Description: ILLiad addon to check Alma licenses for electronic resources before routing lending requests.
+-- Adds notes to transactions and routes (or doesn't) based on configurable settings.
+-- Could be used to do unmediated lending of electronic resources if desired, or just to inform staff of the license status before they manually route.
+-- Features: Search order configuration and logic if Article Reqesut, search PhotoArticleTitle. 
 -- ============================================================
 
 luanet.load_assembly("System")
@@ -69,7 +72,7 @@ function ProcessTransactions()
         local queueSql = table.concat(queueList, ", ")
 
         local query = [[
-            SELECT TransactionNumber, ESPNumber, ISSN, LoanTitle, PhotoJournalTitle 
+            SELECT TransactionNumber, ESPNumber, ISSN, LoanTitle, PhotoJournalTitle, PhotoArticleTitle, RequestType 
             FROM Transactions 
             WHERE TransactionStatus IN (]] .. queueSql .. [[)
         ]]
@@ -99,6 +102,8 @@ function ProcessTransactions()
                 data.ISSN = GetCol(row, "ISSN")
                 data.LoanTitle = GetCol(row, "LoanTitle")
                 data.ArticleTitle = GetCol(row, "PhotoJournalTitle")
+                data.ArticleTitle = GetCol(row, "PhotoArticleTitle")
+                data.RequestType = GetCol(row, "RequestType")
 
                 if data.TN and data.TN ~= "" then table.insert(transactionsToProcess, data) end
             end
@@ -179,7 +184,7 @@ end
 -- SMART SEARCH LOGIC (AGGREGATING ALL RESULTS)
 -- ==========================================
 
-function GetMmsIdsSmart(tn, oclc, isxn, title)
+function GetMmsIdsSmart(data)
     local validMmsIds = {}
     local checkedMmsIds = {}
 
@@ -189,36 +194,35 @@ function GetMmsIdsSmart(tn, oclc, isxn, title)
             if not checkedMmsIds[mms] then
                 checkedMmsIds[mms] = true
                 if HasPortfolios(mms) then
-                    log:Debug("Valid Portfolio found on MMS: " .. mms)
                     table.insert(validMmsIds, mms)
                 end
             end
         end
     end
 
-    -- 1. OCLC Exact
-    if oclc and oclc ~= "" then
-        CheckList(CallPrimoApi("any,contains," .. oclc))
-    end
-    
-    -- 2. ISxN (ISBN/ISSN)
-    if isxn and isxn ~= "" then
-        local clean = isxn:gsub("[- ]", "")
-        local field = (string.len(clean) > 9) and "isbn" or "issn"
-        CheckList(CallPrimoApi(field .. ",exact," .. clean))
-    end
+    for option in string.gmatch(Settings.SearchOptions, '([^,]+)') do
+        local key = option:match("^%s*(.-)%s*$"):upper()
 
-    -- 3. OCLC Numeric Only
-    if oclc and oclc ~= "" then
-        local num = oclc:gsub("%D", "")
-        if num ~= "" then
-            CheckList(CallPrimoApi("any,contains," .. num))
+        if key == "OCLC" and data.OCLC ~= "" then
+            CheckList(CallPrimoApi("any,contains," .. data.OCLC))
+        
+        elseif key == "ISSN" and data.ISSN ~= "" then
+            local clean = data.ISSN:gsub("[- ]", "")
+            local field = (string.len(clean) > 9) and "isbn" or "issn"
+            CheckList(CallPrimoApi(field .. ",exact," .. clean))
+
+        elseif key == "TITLE" then
+            -- Use Article Title for Articles to avoid Journal-level coverage issues
+            local targetTitle = (data.RequestType == "Article") and data.ArticleTitle or data.LoanTitle
+            
+            if targetTitle and targetTitle ~= "" then
+                log:Debug("Searching by specific " .. data.RequestType .. " Title: " .. targetTitle)
+                CheckList(CallPrimoApi("title,contains," .. targetTitle))
+            end
         end
-    end
 
-    -- 4. Title (Fallback only if nothing found yet, prevents API flooding)
-    if #validMmsIds == 0 and title and title ~= "" then
-        CheckList(CallPrimoApi("title,contains," .. title))
+        -- Exit early once a specific match is found
+        if #validMmsIds > 0 then break end
     end
 
     return validMmsIds
