@@ -35,7 +35,7 @@ function Init()
     Settings.PrimoVid = GetSetting("PrimoVid")
     Settings.PrimoTab = GetSetting("PrimoTab")
     Settings.PrimoScope = GetSetting("PrimoScope")
-    
+    Settings.SearchOptions = GetSetting("SearchOptions")
     Settings.ProcessQueue = GetSetting("ProcessQueue")
     Settings.AutoRoute = GetSetting("AutoRoute")
     Settings.SuccessQueue = GetSetting("SuccessQueue")
