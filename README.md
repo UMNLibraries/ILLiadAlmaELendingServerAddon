@@ -1,6 +1,5 @@
-# ILLiadAlmaELendingServerAddon
+# Alma License Lookup & E-Lending Addon
 Automates Alma license terms for ILLiad Lending requests.
-# ILLiad Alma Unmediated E-Lending Server Addon
 
 **Type:** Server Addon
 
