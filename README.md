@@ -10,7 +10,7 @@ This addon automates the checking of Alma license terms for ILLiad Lending reque
 Based on the result, the request is automatically routed to a Success, Deny, or Not Found queue if auto-routing on and custom queues of your choice. Additionally, licensing information will be added to a note in request. If auto-routing is off, note will just be added. To re-run a check against a TN, you must delete previous notes added. 
 
 ## Features
-* **Waterfall Search:** Searches Primo by OCLC, ISBN/ISSN, and Title (in that order) to find the best match.
+* **Search Configuration:** Configure Title, OCLC, ISSN, and in what order for search. 
 * **License Validation:** Checks Alma license terms for specific permissions (`ILLELEC`, `ILLSET`, `ILLPRINTFAX`, `INTLILL`) set to `PERMITTED`.
 * **Direct SQL:** Uses optimized SQL queries to read transaction data without loading heavy ILLiad objects.
 
@@ -45,6 +45,7 @@ These values control where the addon searches within your catalog.
 * **PrimoVid:** View ID.
 * **PrimoTab:** Search Tab.
 * **PrimoScope:** Search Scope.
+* **SearchOptions:** Comma-separated list of search types: OCLC, ISSN, TITLE. Will search by order. If Article Request, Title uses ArticleTitle.
 
 ### Queue Management
 * **ProcessQueue:** The queue(s) the addon monitors (e.g., `Awaiting Lending Request Processing`).
