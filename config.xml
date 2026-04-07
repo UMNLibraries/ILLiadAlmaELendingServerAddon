@@ -1,5 +1,5 @@
 <Configuration>
-  <Name>Alma Unmediated E-Lending Server Addon</Name>
+  <Name>Alma E-Lending Assistant Server Addon</Name>
   <Author>Robert Timothy Wilson, University of Minnesota</Author>
   <Version>2.0.4</Version>
   <Active>true</Active>
