@@ -1,10 +1,11 @@
 -- ============================================================
--- ALMA LICENSE CHECK (v2.0.1)
+-- ALMA LICENSE CHECK (v2.0.5)
 -- Description: ILLiad addon to check Alma licenses for electronic resources before routing lending requests.
 -- Adds notes to transactions and routes (or doesn't) based on configurable settings.
 -- Could be used to do unmediated lending of electronic resources if desired, or just to inform staff of the license status before they manually route.
 -- Features: Search order configuration and logic if Article Reqesut, search PhotoArticleTitle. 
 -- ============================================================
+
 
 luanet.load_assembly("System")
 luanet.load_assembly("System.Data")
@@ -22,6 +23,52 @@ require "JsonParser"
 
 local Settings = {}
 local isCurrentlyProcessing = false
+
+-- Centralized Redaction Helper for Alma & Primo API Keys
+local function Redact(value)
+    if value == nil then return nil end
+    local str = tostring(value)
+    local keysToRedact = {}
+
+    if Settings then
+        if Settings.AlmaApiKey and Settings.AlmaApiKey ~= "" then table.insert(keysToRedact, Settings.AlmaApiKey) end
+        if Settings.PrimoApiKey and Settings.PrimoApiKey ~= "" then table.insert(keysToRedact, Settings.PrimoApiKey) end
+    end
+
+    for _, key in ipairs(keysToRedact) do
+        local literalPattern = key:gsub("(%W)", "%%%1")
+        str = str:gsub(literalPattern, "[REDACTED]")
+    end
+    return str
+end
+
+-- Extracts nested error messages and HTTP response streams to catch hidden API keys
+local function GetExceptionMessage(ex)
+    if ex == nil then return "" end
+    local msg = tostring(ex)
+    pcall(function()
+        if type(ex) == "userdata" then
+            if ex.Message then
+                msg = ex.Message
+            end
+            local inner = ex.InnerException
+            if inner then
+                msg = msg .. "\nInner Exception: " .. tostring(inner.Message)
+                if inner.Response then
+                    local reader = luanet.import_type("System.IO.StreamReader")(inner.Response:GetResponseStream())
+                    msg = msg .. "\nResponse Body: " .. tostring(reader:ReadToEnd())
+                    reader:Close()
+                end
+            end
+            if ex.Response then
+                local reader = luanet.import_type("System.IO.StreamReader")(ex.Response:GetResponseStream())
+                msg = msg .. "\nResponse Body: " .. tostring(reader:ReadToEnd())
+                reader:Close()
+            end
+        end
+    end)
+    return msg
+end
 
 function Init()
     pcall(function()
@@ -43,7 +90,7 @@ function Init()
     Settings.NotFoundQueue = GetSetting("NotFoundQueue")
 
     RegisterSystemEventHandler("SystemTimerElapsed", "TimerElapsed")
-    log:Debug("Alma License Check: Initialized (v2.0.0).")
+    log:Debug("Alma License Check: Initialized (v2.0.3).")
 end
 
 function TimerElapsed()
@@ -51,7 +98,7 @@ function TimerElapsed()
     isCurrentlyProcessing = true
 
     local success, err = pcall(function() ProcessTransactions() end)
-    if not success then log:Error("CRITICAL ERROR: " .. tostring(err)) end
+    if not success then log:Error("CRITICAL ERROR: " .. Redact(GetExceptionMessage(err))) end
 
     isCurrentlyProcessing = false
 end
@@ -63,11 +110,12 @@ function ProcessTransactions()
     local dbSuccess, dbErr = pcall(function()
         connection:Connect()
         
-        -- Parse comma-separated queues into a SQL IN clause
+        -- Parse comma-separated queues into a SQL IN clause and safely escape single quotes
         local queueList = {}
         for q in string.gmatch(Settings.ProcessQueue, '([^,]+)') do
-            -- Trim whitespace and wrap in single quotes
-            table.insert(queueList, "'" .. q:match("^%s*(.-)%s*$") .. "'")
+            local trimmed = q:match("^%s*(.-)%s*$")
+            local escaped = trimmed:gsub("'", "''")
+            table.insert(queueList, "'" .. escaped .. "'")
         end
         local queueSql = table.concat(queueList, ", ")
 
@@ -92,7 +140,8 @@ function ProcessTransactions()
         
         if results and results.Rows then
             local rows = results.Rows
-            for i = 0, 100 do
+            -- Dynamically evaluate all rows returned from the query
+            for i = 0, results.Rows.Count - 1 do
                 local success, row = pcall(function() return rows:get_Item(i) end)
                 if not success or not row then break end
 
@@ -101,7 +150,7 @@ function ProcessTransactions()
                 data.OCLC = GetCol(row, "ESPNumber")
                 data.ISSN = GetCol(row, "ISSN")
                 data.LoanTitle = GetCol(row, "LoanTitle")
-                data.ArticleTitle = GetCol(row, "PhotoJournalTitle")
+                data.JournalTitle = GetCol(row, "PhotoJournalTitle")
                 data.ArticleTitle = GetCol(row, "PhotoArticleTitle")
                 data.RequestType = GetCol(row, "RequestType")
 
@@ -114,13 +163,14 @@ function ProcessTransactions()
         for _, txnData in ipairs(transactionsToProcess) do
             local procSuccess, procErr = pcall(function() EvaluateTransaction(txnData) end)
             if not procSuccess then
-                log:Error("Error processing TN " .. tostring(txnData.TN) .. ": " .. tostring(procErr))
-                ExecuteCommand("AddNote", {tonumber(txnData.TN), "Alma Addon Error: " .. tostring(procErr)})
+                local errMsg = GetExceptionMessage(procErr)
+                log:Error("Error processing TN " .. tostring(txnData.TN) .. ": " .. Redact(errMsg))
+                ExecuteCommand("AddNote", {tonumber(txnData.TN), "Alma Addon Error: " .. Redact(errMsg)})
             end
         end
     end)
 
-    if not dbSuccess then log:Error("Database Execution Failed: " .. tostring(dbErr)) end
+    if not dbSuccess then log:Error("Database Execution Failed: " .. Redact(GetExceptionMessage(dbErr))) end
     connection:Dispose()
 end
 
@@ -135,8 +185,6 @@ function EvaluateTransaction(data)
     local tn = tonumber(data.TN)
     ExecuteCommand("AddNote", {tn, "Alma Check: Starting evaluation..."})
 
-    -- Retrieves a LIST of MMS IDs rather than stopping at the first match
-    -- local mmsIds = GetMmsIdsSmart(tn, data.OCLC, data.ISSN, data.LoanTitle or data.ArticleTitle)
     local mmsIds = GetMmsIdsSmart(data)
 
     if mmsIds and #mmsIds > 0 then
@@ -184,25 +232,18 @@ end
 function CleanTitle(title)
     if not title or title == "" then return "" end
     
-    -- 1. Remove special chars BUT KEEP hyphens and apostrophes
-    -- This turns "COVID-19: A Study!" into "COVID-19 A Study"
     local clean = title:gsub("[^%w%s%-%']", " ")
-    
-    -- 2. Collapse multiple spaces into a single space
     clean = clean:gsub("%s+", " ")
-    
-    -- 3. Trim leading and trailing whitespace
     clean = clean:match("^%s*(.-)%s*$")
     
-    -- 4. Truncate to the first 60 characters to avoid API limits
     if string.len(clean) > 60 then
         clean = string.sub(clean, 1, 60)
-        -- Ensure we don't cut off in the middle of a word
         clean = clean:match("(.*)%s") or clean
     end
     
     return clean
 end
+
 -- ==========================================
 -- SMART SEARCH LOGIC (AGGREGATING ALL RESULTS)
 -- ==========================================
@@ -235,16 +276,24 @@ function GetMmsIdsSmart(data)
             CheckList(CallPrimoApi(field .. ",exact," .. clean))
 
         elseif key == "TITLE" then
-            -- Targeted Search: Article Title for Articles, Loan Title for Books
-            local rawTitle = (data.RequestType == "Article") and data.ArticleTitle or data.LoanTitle
-            -- Scrub title
+            -- Prefer checking the journal catalog record first; fall back to the article name if empty
+            local rawTitle = ""
+            if data.RequestType == "Article" then
+                if data.JournalTitle and data.JournalTitle ~= "" then
+                    rawTitle = data.JournalTitle
+                else
+                    rawTitle = data.ArticleTitle
+                end
+            else
+                rawTitle = data.LoanTitle
+            end
+
             local targetTitle = CleanTitle(rawTitle)
             if targetTitle and targetTitle ~= "" then
                 log:Debug("Searching by Cleaned " .. data.RequestType .. " Title: " .. targetTitle)
                 CheckList(CallPrimoApi("title,contains," .. targetTitle))
             end
         end
-        -- Exit early once a specific match is found
         if #validMmsIds > 0 then break end
     end
 
@@ -274,8 +323,11 @@ function SafeDownload(url)
     client.Headers:Add("User-Agent", "ILLiad/AlmaAddon")
     client.Headers:Add("Accept", "application/json")
     local success, res = pcall(function() return client:DownloadString(url) end)
+    client:Dispose() -- Explicitly clear the managed WebClient connection context to clean up resources
+    
     if not success then
-        log:Error("API FAIL: " .. url .. " | Error: " .. tostring(res))
+        local errMsg = GetExceptionMessage(res)
+        log:Error("API FAIL: " .. Redact(url) .. " | Error: " .. Redact(errMsg))
         return nil
     end
     return res
@@ -339,7 +391,6 @@ function CheckAlmaLending(tn, mmsId)
             if permitted then
                 isAllowed = true
                 
-                -- Format the output to show "License Name (License Code)"
                 local displayString = licId
                 if licName and licName ~= "" then
                     displayString = licName .. " (" .. licId .. ")"
@@ -358,7 +409,7 @@ function GetCollectionLicense(collId)
     local res = SafeDownload(url)
     if res then
         local json = JsonParser:ParseJSON(res)
-        if json.license and json.license.value then return json.license.value end
+        if json and json.license and json.license.value then return json.license.value end
     end
     return nil
 end
