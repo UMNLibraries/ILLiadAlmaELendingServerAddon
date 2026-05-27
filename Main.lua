@@ -90,7 +90,7 @@ function Init()
     Settings.NotFoundQueue = GetSetting("NotFoundQueue")
 
     RegisterSystemEventHandler("SystemTimerElapsed", "TimerElapsed")
-    log:Debug("Alma License Check: Initialized (v2.0.3).")
+    log:Debug("Alma License Check: Initialized.")
 end
 
 function TimerElapsed()
