@@ -1,11 +1,9 @@
 -- ============================================================
--- ALMA LICENSE CHECK (v2.0.5)
+-- ALMA LICENSE CHECK (v2.0.6)
 -- Description: ILLiad addon to check Alma licenses for electronic resources before routing lending requests.
 -- Adds notes to transactions and routes (or doesn't) based on configurable settings.
--- Could be used to do unmediated lending of electronic resources if desired, or just to inform staff of the license status before they manually route.
--- Features: Search order configuration and logic if Article Reqesut, search PhotoArticleTitle. 
+-- Features: Search order configuration, structural syntax safety, and explicit MMS ID validation.
 -- ============================================================
-
 
 luanet.load_assembly("System")
 luanet.load_assembly("System.Data")
@@ -19,6 +17,7 @@ local HttpUtility = luanet.import_type("System.Web.HttpUtility")
 local LogManager = luanet.import_type("log4net.LogManager")
 local log = LogManager.GetLogger("AtlasSystems.Addons.AlmaLicenseCheck")
 
+-- Explicitly separate external requirements to guarantee clean compiler parsing
 require "JsonParser"
 
 local Settings = {}
@@ -42,7 +41,7 @@ local function Redact(value)
     return str
 end
 
--- Extracts nested error messages and HTTP response streams to catch hidden API keys
+-- Extracts nested error messages and HTTP response streams safely
 local function GetExceptionMessage(ex)
     if ex == nil then return "" end
     local msg = tostring(ex)
@@ -75,7 +74,14 @@ function Init()
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
     end)
 
-    Settings.BaseUrl = GetSetting("BaseUrl")
+    -- Retrieve BaseUrl and safely sanitize trailing slashes to avoid gateway double-slash 400 errors
+    local baseUrl = GetSetting("BaseUrl")
+    if baseUrl then
+        Settings.BaseUrl = baseUrl:gsub("/+$", "")
+    else
+        Settings.BaseUrl = ""
+    end
+
     Settings.PrimoApiKey = GetSetting("PrimoApiKey")
     Settings.AlmaApiKey = GetSetting("AlmaApiKey")
     Settings.PrimoInst = GetSetting("PrimoInst")
@@ -90,7 +96,7 @@ function Init()
     Settings.NotFoundQueue = GetSetting("NotFoundQueue")
 
     RegisterSystemEventHandler("SystemTimerElapsed", "TimerElapsed")
-    log:Debug("Alma License Check: Initialized.")
+    log:Debug("Alma License Check: Initialized (v2.0.6).")
 end
 
 function TimerElapsed()
@@ -150,6 +156,7 @@ function ProcessTransactions()
                 data.OCLC = GetCol(row, "ESPNumber")
                 data.ISSN = GetCol(row, "ISSN")
                 data.LoanTitle = GetCol(row, "LoanTitle")
+                -- FIXED: Assigned journal title and article title to distinct target properties
                 data.JournalTitle = GetCol(row, "PhotoJournalTitle")
                 data.ArticleTitle = GetCol(row, "PhotoArticleTitle")
                 data.RequestType = GetCol(row, "RequestType")
@@ -268,12 +275,12 @@ function GetMmsIdsSmart(data)
         local key = option:match("^%s*(.-)%s*$"):upper()
 
         if key == "OCLC" and data.OCLC ~= "" then
-            CheckList(CallPrimoApi("any,contains," .. data.OCLC))
+            CheckList(CallPrimoApi("any", "contains", data.OCLC))
         
         elseif key == "ISSN" and data.ISSN ~= "" then
             local clean = data.ISSN:gsub("[- ]", "")
             local field = (string.len(clean) > 9) and "isbn" or "issn"
-            CheckList(CallPrimoApi(field .. ",exact," .. clean))
+            CheckList(CallPrimoApi(field, "exact", clean))
 
         elseif key == "TITLE" then
             -- Prefer checking the journal catalog record first; fall back to the article name if empty
@@ -291,7 +298,7 @@ function GetMmsIdsSmart(data)
             local targetTitle = CleanTitle(rawTitle)
             if targetTitle and targetTitle ~= "" then
                 log:Debug("Searching by Cleaned " .. data.RequestType .. " Title: " .. targetTitle)
-                CheckList(CallPrimoApi("title,contains," .. targetTitle))
+                CheckList(CallPrimoApi("title", "contains", targetTitle))
             end
         end
         if #validMmsIds > 0 then break end
@@ -323,7 +330,7 @@ function SafeDownload(url)
     client.Headers:Add("User-Agent", "ILLiad/AlmaAddon")
     client.Headers:Add("Accept", "application/json")
     local success, res = pcall(function() return client:DownloadString(url) end)
-    client:Dispose() -- Explicitly clear the managed WebClient connection context to clean up resources
+    client:Dispose() -- Explicitly clear connections
     
     if not success then
         local errMsg = GetExceptionMessage(res)
@@ -333,10 +340,14 @@ function SafeDownload(url)
     return res
 end
 
-function CallPrimoApi(q)
+-- Safe components composition prevents parsing comma encoding 400 issues
+function CallPrimoApi(field, precision, value)
+    local encodedValue = HttpUtility.UrlEncode(value)
+    local qStr = string.format("%s,%s,%s", field, precision, encodedValue)
+
     local url = string.format("%s/primo/v1/search?inst=%s&vid=%s&tab=%s&scope=%s&q=%s&apikey=%s",
         Settings.BaseUrl, Settings.PrimoInst, Settings.PrimoVid, 
-        Settings.PrimoTab, Settings.PrimoScope, HttpUtility.UrlEncode(q), Settings.PrimoApiKey)
+        Settings.PrimoTab, Settings.PrimoScope, qStr, Settings.PrimoApiKey)
     
     local res = SafeDownload(url)
     local mmsList = {}
@@ -351,11 +362,21 @@ function CallPrimoApi(q)
                     if type(ids) == "table" then
                         for _, rawId in ipairs(ids) do
                             local cleanId = rawId:gsub("alma_", "")
-                            table.insert(mmsList, cleanId)
+                            -- Strict Validation: Filter non-Alma IDs to prevent Alma API 400 errors
+                            if cleanId:match("^99%d+$") then
+                                table.insert(mmsList, cleanId)
+                            else
+                                log:Debug("Ignoring non-Alma ID found in Primo results: " .. cleanId)
+                            end
                         end
                     else
                         local cleanId = ids:gsub("alma_", "")
-                        table.insert(mmsList, cleanId)
+                        -- Strict Validation: Filter non-Alma IDs to prevent Alma API 400 errors
+                        if cleanId:match("^99%d+$") then
+                            table.insert(mmsList, cleanId)
+                        else
+                            log:Debug("Ignoring non-Alma ID found in Primo results: " .. cleanId)
+                        end
                     end
                 end
             end
